@@ -1,7 +1,22 @@
-from rl_zoo3.train import train
+import argparse
+import difflib
+import importlib
+import os
+import time
+import uuid
 
-if __name__ == "__main__":  # noqa: C901
-<<<<<<< HEAD
+import gym
+import numpy as np
+import torch as th
+from stable_baselines3.common.utils import set_random_seed
+
+# Register custom envs
+import rl_zoo3.import_envs  # noqa: F401 pytype: disable=import-error
+from rl_zoo3.exp_manager import ExperimentManager
+from rl_zoo3.utils import ALGOS, StoreDict
+
+
+def train():
     parser = argparse.ArgumentParser()
     parser.add_argument("--algo", help="RL Algorithm", default="ppo", type=str, required=False, choices=list(ALGOS.keys()))
     parser.add_argument("--env", type=str, default="CartPole-v1", help="environment ID")
@@ -107,7 +122,19 @@ if __name__ == "__main__":  # noqa: C901
         help="Overwrite hyperparameter (e.g. learning_rate:0.01 train_freq:10)",
     )
     parser.add_argument(
-        "-yaml", "--yaml-file", type=str, default=None, help="Custom yaml file from which the hyperparameters will be loaded"
+        "-conf",
+        "--conf-file",
+        type=str,
+        default=None,
+        help="Custom yaml file or python package from which the hyperparameters will be loaded."
+        "We expect that python packages contain a dictionary called 'hyperparams' which contains a key for each environment.",
+    )
+    parser.add_argument(
+        "-yaml",
+        "--yaml-file",
+        type=str,
+        default=None,
+        help="This parameter is deprecated, please use `--conf-file` instead",
     )
     parser.add_argument("-uuid", "--uuid", action="store_true", default=False, help="Ensure that the run has a unique ID")
     parser.add_argument(
@@ -118,7 +145,14 @@ if __name__ == "__main__":  # noqa: C901
     )
     parser.add_argument("--wandb-project-name", type=str, default="sb3", help="the wandb's project name")
     parser.add_argument("--wandb-entity", type=str, default=None, help="the entity (team) of wandb's project")
-    parser.add_argument("--arch-info", type=str, default='')
+    parser.add_argument(
+        "-P",
+        "--progress",
+        action="store_true",
+        default=False,
+        help="if toggled, display a progress bar using tqdm and rich",
+    )
+
     args = parser.parse_args()
 
     # Going through custom gym packages to let them register in the global registory
@@ -127,6 +161,11 @@ if __name__ == "__main__":  # noqa: C901
 
     env_id = args.env
     registered_envs = set(gym.envs.registry.env_specs.keys())  # pytype: disable=module-attr
+
+    if args.yaml_file is not None:
+        raise ValueError(
+            "The`--yaml-file` parameter is deprecated and will be removed in RL Zoo3 v1.8, please use `--conf-file` instead",
+        )
 
     # If the environment is not found, suggest the closest match
     if env_id not in registered_envs:
@@ -212,7 +251,8 @@ if __name__ == "__main__":  # noqa: C901
         n_eval_envs=args.n_eval_envs,
         no_optim_plots=args.no_optim_plots,
         device=args.device,
-        yaml_file=args.yaml_file,
+        config=args.conf_file,
+        show_progress=args.progress,
     )
 
     # Prepare experiment and launch hyperparameter optimization if needed
@@ -230,6 +270,7 @@ if __name__ == "__main__":  # noqa: C901
             exp_manager.save_trained_model(model)
     else:
         exp_manager.hyperparameters_optimization()
-=======
+
+
+if __name__ == "__main__":
     train()
->>>>>>> 1f9cfcfa3b4a12f374aef12d0cbc13d44b3a7674

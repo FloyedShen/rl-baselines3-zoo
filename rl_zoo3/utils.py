@@ -2,7 +2,7 @@ import argparse
 import glob
 import importlib
 import os
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 import gym
 import stable_baselines3 as sb3  # noqa: F401
@@ -57,8 +57,8 @@ def get_wrapper_class(hyperparams: Dict[str, Any], key: str = "env_wrapper") -> 
     for multiple, specify a list:
 
     env_wrapper:
-        - utils.wrappers.PlotActionWrapper
-        - utils.wrappers.TimeFeatureWrapper
+        - rl_zoo3.wrappers.PlotActionWrapper
+        - rl_zoo3.wrappers.TimeFeatureWrapper
 
 
     :param hyperparams:
@@ -118,6 +118,26 @@ def get_wrapper_class(hyperparams: Dict[str, Any], key: str = "env_wrapper") -> 
         return None
 
 
+def get_class_by_name(name: str) -> Type:
+    """
+    Imports and returns a class given the name, e.g. passing
+    'stable_baselines3.common.callbacks.CheckpointCallback' returns the
+    CheckpointCallback class.
+
+    :param name:
+    :return:
+    """
+
+    def get_module_name(name: str) -> str:
+        return ".".join(name.split(".")[:-1])
+
+    def get_class_name(name: str) -> str:
+        return name.split(".")[-1]
+
+    module = importlib.import_module(get_module_name(name))
+    return getattr(module, get_class_name(name))
+
+
 def get_callback_list(hyperparams: Dict[str, Any]) -> List[BaseCallback]:
     """
     Get one or more Callback class specified as a hyper-parameter
@@ -128,18 +148,12 @@ def get_callback_list(hyperparams: Dict[str, Any]) -> List[BaseCallback]:
     for multiple, specify a list:
 
     callback:
-        - utils.callbacks.PlotActionWrapper
+        - rl_zoo3.callbacks.PlotActionWrapper
         - stable_baselines3.common.callbacks.CheckpointCallback
 
     :param hyperparams:
     :return:
     """
-
-    def get_module_name(callback_name):
-        return ".".join(callback_name.split(".")[:-1])
-
-    def get_class_name(callback_name):
-        return callback_name.split(".")[-1]
 
     callbacks = []
 
@@ -168,8 +182,8 @@ def get_callback_list(hyperparams: Dict[str, Any]) -> List[BaseCallback]:
                 kwargs = callback_dict[callback_name]
             else:
                 kwargs = {}
-            callback_module = importlib.import_module(get_module_name(callback_name))
-            callback_class = getattr(callback_module, get_class_name(callback_name))
+
+            callback_class = get_class_by_name(callback_name)
             callbacks.append(callback_class(**kwargs))
 
     return callbacks
@@ -199,7 +213,7 @@ def create_test_env(
     :return:
     """
     # Avoid circular import
-    from utils.exp_manager import ExperimentManager
+    from rl_zoo3.exp_manager import ExperimentManager
 
     # Create the environment and wrap it if necessary
     env_wrapper = get_wrapper_class(hyperparams)
@@ -216,6 +230,13 @@ def create_test_env(
         # as Pybullet envs does not follow gym.render() interface
         vec_env_cls = SubprocVecEnv
         # start_method = 'spawn' for thread safe
+
+    # panda-gym is based on pybullet, whose rendering requires to be configure at initialization
+    if ExperimentManager.is_panda_gym(env_id) and should_render:
+        if env_kwargs is None:
+            env_kwargs = {"render": True}
+        else:
+            env_kwargs["render"] = True
 
     env = make_vec_env(
         env_id,

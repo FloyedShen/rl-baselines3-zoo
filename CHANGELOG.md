@@ -1,20 +1,83 @@
-## Release 1.6.1a0 (WIP)
+## Release 1.7.0a2 (WIP)
+
+### Breaking Changes
+- `--yaml-file` argument was renamed to `-conf` (`--conf-file`) as now python file are supported too
+
+### New Features
+- Specifying custom policies in yaml file is now supported (@Rick-v-E)
+- Added ``monitor_kwargs`` parameter
+- Handle the `env_kwargs` of `render:True` under the hood for panda-gym v1 envs in `enjoy` replay to match visualzation behavior of other envs
+- Added support for python config file
+
+### Bug fixes
+- Allow `python -m rl_zoo3.cli` to be called directly
+- Fix a bug where custom environments were not found despite passing ``--gym-package`` when using subprocesses
+
+### Documentation
+
+### Other
+
+
+## Release 1.6.3 (2022-10-13)
 
 ### Breaking Changes
 
 ### New Features
+
+### Bug fixes
+- `python3 -m rl_zoo3.train` now works as expected
+
+### Documentation
+- Added instructions and examples on passing arguments in an interactive session (@richter43)
+
+### Other
+- Used issue forms instead of issue templates
+
+
+## Release 1.6.2.post2 (2022-10-10)
+
+### Breaking Changes
+- RL Zoo is now a python package
+- low pass filter was removed
+- Upgraded to Stable-Baselines3 (SB3) >= 1.6.2
+- Upgraded to sb3-contrib >= 1.6.2
+- Use now built-in SB3 `ProgressBarCallback` instead of `TQDMCallback`
+
+### New Features
+- RL Zoo cli: `rl_zoo3 train` and `rl_zoo3 enjoy`
+
+### Bug fixes
+
+### Documentation
+
+### Other
+
+## Release 1.6.1 (2022-09-30)
+
+**Progress bar and custom yaml file**
+
+### Breaking Changes
+- Upgraded to Stable-Baselines3 (SB3) >= 1.6.1
+- Upgraded to sb3-contrib >= 1.6.1
+
+### New Features
 - Added `--yaml-file` argument option for `train.py`to read hyperparameters from custom yaml files (@JohannesUl)
+
 ### Bug fixes
 - Added `custom_object` parameter on record_video.py (@Affonso-Gui)
 - Changed `optimize_memory_usage` to `False` for DQN/QR-DQN on record_video.py (@Affonso-Gui)
 - In `ExperimentManager` `_maybe_normalize` set `training` to `False` for eval envs,
   to prevent normalization stats from being updated in eval envs (e.g. in EvalCallback) (@pchalasani).
+- Only one env is used to get the action space while optimizing hyperparameters and it is correctly closed (@SammyRamone)
+- Added progress bar via the `-P` argument using tqdm and rich
 
 ### Documentation
 
 ### Other
 
 ## Release 1.6.0 (2022-08-05)
+
+**RecurrentPPO (ppo_lstm) and Huggingface integration**
 
 ### Breaking Changes
 - Change default value for number of hyperparameter optimization trials from 10 to 500. (@ernestum)
@@ -179,7 +242,7 @@
 - Clarify n_evaluations help text (@jkterry)
 - Simplified hyperparameters files making use of defaults
 - Added new TQC+HER agents
-- Add `panda-gym`environments (@qgallouedec)
+- Add `panda-gym` environments (@qgallouedec)
 
 ## Release 1.0 (2021-03-17)
 

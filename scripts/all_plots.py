@@ -1,8 +1,6 @@
-import argparse
-import os
-import pickle
-from copy import deepcopy
+from rl_zoo3.plots.all_plots import all_plots
 
+<<<<<<< HEAD
 import numpy as np
 import pytablewriter
 import seaborn
@@ -101,9 +99,12 @@ for env in args.env:  # noqa: C901
                 timesteps = timesteps[:max_len]
 
                 if len(log[args.key]) >= max_len:
-                    last_eval.append(log[args.key][max_len - 1])
+                    # last_eval.append(log[args.key][max_len - 1])
+                    last_eval.append(log[args.key].max(0))
+                    # print(log[args.key].shape)
                 else:
-                    last_eval.append(log[args.key][-1])
+                    # last_eval.append(log[args.key][-1])
+                    last_eval.append(log[args.key].max(0))
 
             # Merge runs with different eval freq:
             # ex: (100,) eval vs (10,)
@@ -242,3 +243,7 @@ if args.output is not None:
 
 if not args.no_display:
     plt.show()
+=======
+if __name__ == "__main__":
+    all_plots()
+>>>>>>> 1f9cfcfa3b4a12f374aef12d0cbc13d44b3a7674

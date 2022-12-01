@@ -1,9 +1,11 @@
 import argparse
+import importlib
 import os
 import pickle as pkl
 import time
 import warnings
 from collections import OrderedDict
+from pathlib import Path
 from pprint import pprint
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -13,7 +15,6 @@ import optuna
 import torch as th
 import yaml
 from huggingface_sb3 import EnvironmentName
-from optuna.integration.skopt import SkoptSampler
 from optuna.pruners import BasePruner, MedianPruner, NopPruner, SuccessiveHalvingPruner
 from optuna.samplers import BaseSampler, RandomSampler, TPESampler
 from optuna.study import MaxTrialsCallback
@@ -24,7 +25,7 @@ from sb3_contrib.common.vec_env import AsyncEval
 # For using HER with GoalEnv
 from stable_baselines3 import HerReplayBuffer  # noqa: F401
 from stable_baselines3.common.base_class import BaseAlgorithm
-from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback, ProgressBarCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
 from stable_baselines3.common.preprocessing import is_image_space, is_image_space_channels_first
@@ -44,10 +45,10 @@ from stable_baselines3.common.vec_env import (
 from torch import nn as nn  # noqa: F401
 
 # Register custom envs
-import utils.import_envs  # noqa: F401 pytype: disable=import-error
-from utils.callbacks import SaveVecNormalizeCallback, TrialEvalCallback
-from utils.hyperparams_opt import HYPERPARAMS_SAMPLER
-from utils.utils import ALGOS, get_callback_list, get_latest_run_id, get_wrapper_class, linear_schedule
+import rl_zoo3.import_envs  # noqa: F401 pytype: disable=import-error
+from rl_zoo3.callbacks import SaveVecNormalizeCallback, TrialEvalCallback
+from rl_zoo3.hyperparams_opt import HYPERPARAMS_SAMPLER
+from rl_zoo3.utils import ALGOS, get_callback_list, get_class_by_name, get_latest_run_id, get_wrapper_class, linear_schedule
 
 
 class ExperimentManager:
@@ -93,14 +94,22 @@ class ExperimentManager:
         n_eval_envs: int = 1,
         no_optim_plots: bool = False,
         device: Union[th.device, str] = "auto",
-        yaml_file: Optional[str] = None,
+        config: Optional[str] = None,
+        show_progress: bool = False,
     ):
         super().__init__()
         self.algo = algo
         self.env_name = EnvironmentName(env_id)
         # Custom params
         self.custom_hyperparams = hyperparams
-        self.yaml_file = yaml_file or f"hyperparams/{self.algo}.yml"
+        if (Path(__file__).parent / "hyperparams").is_dir():
+            # Package version
+            default_path = Path(__file__).parent
+        else:
+            # Take the root folder
+            default_path = Path(__file__).parent.parent
+
+        self.config = config or str(default_path / f"hyperparams/{self.algo}.yml")
         self.env_kwargs = {} if env_kwargs is None else env_kwargs
         self.n_timesteps = n_timesteps
         self.normalize = False
@@ -127,6 +136,7 @@ class ExperimentManager:
         self.n_envs = 1  # it will be updated when reading hyperparams
         self.n_actions = None  # For DDPG/TD3 action noise objects
         self._hyperparams = {}
+        self.monitor_kwargs = {}
 
         self.trained_agent = trained_agent
         self.continue_training = trained_agent.endswith(".zip") and os.path.isfile(trained_agent)
@@ -157,6 +167,7 @@ class ExperimentManager:
         self.args = args
         self.log_interval = log_interval
         self.save_replay_buffer = save_replay_buffer
+        self.show_progress = show_progress
 
         self.log_path = f"{log_folder}/{self.algo}/"
         self.save_path = os.path.join(
@@ -178,7 +189,7 @@ class ExperimentManager:
         self.create_callbacks()
 
         # Create env to have access to action space for action noise
-        n_envs = 1 if self.algo == "ars" else self.n_envs
+        n_envs = 1 if self.algo == "ars" or self.optimize_hyperparameters else self.n_envs
         env = self.create_envs(n_envs, no_log=False)
 
         self._hyperparams = self._preprocess_action_noise(hyperparams, saved_hyperparams, env)
@@ -186,6 +197,7 @@ class ExperimentManager:
         if self.continue_training:
             model = self._load_pretrained_agent(self._hyperparams, env)
         elif self.optimize_hyperparameters:
+            env.close()
             return None
         else:
             # Train an agent from scratch
@@ -224,6 +236,9 @@ class ExperimentManager:
             # this allows to save the model when interrupting training
             pass
         finally:
+            # Clean progress bar
+            if len(self.callbacks) > 0:
+                self.callbacks[0].on_training_end()
             # Release resources
             try:
                 model.env.close()
@@ -267,16 +282,28 @@ class ExperimentManager:
         print(f"Log path: {self.save_path}")
 
     def read_hyperparameters(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        # Load hyperparameters from yaml file
-        print(f"Loading hyperparameters from: {self.yaml_file}")
-        with open(self.yaml_file) as f:
-            hyperparams_dict = yaml.safe_load(f)
-            if self.env_name.gym_id in list(hyperparams_dict.keys()):
-                hyperparams = hyperparams_dict[self.env_name.gym_id]
-            elif self._is_atari:
-                hyperparams = hyperparams_dict["atari"]
-            else:
-                raise ValueError(f"Hyperparameters not found for {self.algo}-{self.env_name.gym_id}")
+        print(f"Loading hyperparameters from: {self.config}")
+
+        if self.config.endswith(".yml") or self.config.endswith(".yaml"):
+            # Load hyperparameters from yaml file
+            with open(self.config) as f:
+                hyperparams_dict = yaml.safe_load(f)
+        elif self.config.endswith(".py"):
+            global_variables = {}
+            # Load hyperparameters from python file
+            exec(Path(self.config).read_text(), global_variables)
+            hyperparams_dict = global_variables["hyperparams"]
+        else:
+            # Load hyperparameters from python package
+            hyperparams_dict = importlib.import_module(self.config).hyperparams
+            # raise ValueError(f"Unsupported config file format: {self.config}")
+
+        if self.env_name.gym_id in list(hyperparams_dict.keys()):
+            hyperparams = hyperparams_dict[self.env_name.gym_id]
+        elif self._is_atari:
+            hyperparams = hyperparams_dict["atari"]
+        else:
+            raise ValueError(f"Hyperparameters not found for {self.algo}-{self.env_name.gym_id} in {self.config}")
 
         if self.custom_hyperparams is not None:
             # Overwrite hyperparams if needed
@@ -284,9 +311,9 @@ class ExperimentManager:
         # Sort hyperparams that will be saved
         saved_hyperparams = OrderedDict([(key, hyperparams[key]) for key in sorted(hyperparams.keys())])
 
-        if self.verbose > 0:
-            print("Default hyperparameters for environment (ones being tuned will be overridden):")
-            pprint(saved_hyperparams)
+        # Always print used hyperparameters
+        print("Default hyperparameters for environment (ones being tuned will be overridden):")
+        pprint(saved_hyperparams)
 
         return hyperparams, saved_hyperparams
 
@@ -320,6 +347,10 @@ class ExperimentManager:
             # ex: "dict(norm_obs=False, norm_reward=True)"
             if isinstance(self.normalize, str):
                 self.normalize_kwargs = eval(self.normalize)
+                self.normalize = True
+
+            if isinstance(self.normalize, dict):
+                self.normalize_kwargs = self.normalize
                 self.normalize = True
 
             # Use the same discount factor as for the algorithm
@@ -368,6 +399,14 @@ class ExperimentManager:
             if kwargs_key in hyperparams.keys() and isinstance(hyperparams[kwargs_key], str):
                 hyperparams[kwargs_key] = eval(hyperparams[kwargs_key])
 
+        # Preprocess monitor kwargs
+        if "monitor_kwargs" in hyperparams.keys():
+            self.monitor_kwargs = hyperparams["monitor_kwargs"]
+            # Convert str to python code
+            if isinstance(self.monitor_kwargs, str):
+                self.monitor_kwargs = eval(self.monitor_kwargs)
+            del hyperparams["monitor_kwargs"]
+
         # Delete keys so the dict can be pass to the model constructor
         if "n_envs" in hyperparams.keys():
             del hyperparams["n_envs"]
@@ -376,6 +415,10 @@ class ExperimentManager:
         if "frame_stack" in hyperparams.keys():
             self.frame_stack = hyperparams["frame_stack"]
             del hyperparams["frame_stack"]
+
+        # import the policy when using a custom policy
+        if "policy" in hyperparams and "." in hyperparams["policy"]:
+            hyperparams["policy"] = get_class_by_name(hyperparams["policy"])
 
         # obtain a class object from a wrapper name string in hyperparams
         # and delete the entry
@@ -432,6 +475,9 @@ class ExperimentManager:
 
     def create_callbacks(self):
 
+        if self.show_progress:
+            self.callbacks.append(ProgressBarCallback())
+
         if self.save_freq > 0:
             # Account for the number of parallel environments
             self.save_freq = max(self.save_freq // self.n_envs, 1)
@@ -479,6 +525,11 @@ class ExperimentManager:
     def is_robotics_env(env_id: str) -> bool:
         entry_point = gym.envs.registry.env_specs[env_id].entry_point  # pytype: disable=module-attr
         return "gym.envs.robotics" in str(entry_point) or "panda_gym.envs" in str(entry_point)
+
+    @staticmethod
+    def is_panda_gym(env_id: str) -> bool:
+        entry_point = gym.envs.registry.env_specs[env_id].entry_point  # pytype: disable=module-attr
+        return "panda_gym.envs" in str(entry_point)
 
     def _maybe_normalize(self, env: VecEnv, eval_env: bool) -> VecEnv:
         """
@@ -530,19 +581,28 @@ class ExperimentManager:
         # Do not log eval env (issue with writing the same file)
         log_dir = None if eval_env or no_log else self.save_path
 
-        monitor_kwargs = {}
         # Special case for GoalEnvs: log success rate too
         if (
             "Neck" in self.env_name.gym_id
             or self.is_robotics_env(self.env_name.gym_id)
             or "parking-v0" in self.env_name.gym_id
+            and len(self.monitor_kwargs) == 0  # do not overwrite custom kwargs
         ):
-            monitor_kwargs = dict(info_keywords=("is_success",))
+            self.monitor_kwargs = dict(info_keywords=("is_success",))
+
+        # Define make_env here so it works with subprocesses
+        # when the registry was modified with `--gym-packages`
+        # See https://github.com/HumanCompatibleAI/imitation/pull/160
+        spec = gym.spec(self.env_name.gym_id)
+
+        def make_env(**kwargs) -> gym.Env:
+            env = spec.make(**kwargs)
+            return env
 
         # On most env, SubprocVecEnv does not help and is quite memory hungry
         # therefore we use DummyVecEnv by default
         env = make_vec_env(
-            env_id=self.env_name.gym_id,
+            make_env,
             n_envs=n_envs,
             seed=self.seed,
             env_kwargs=self.env_kwargs,
@@ -550,7 +610,7 @@ class ExperimentManager:
             wrapper_class=self.env_wrapper,
             vec_env_cls=self.vec_env_class,
             vec_env_kwargs=self.vec_env_kwargs,
-            monitor_kwargs=monitor_kwargs,
+            monitor_kwargs=self.monitor_kwargs,
         )
 
         if self.vec_env_wrapper is not None:
@@ -623,6 +683,8 @@ class ExperimentManager:
         elif sampler_method == "tpe":
             sampler = TPESampler(n_startup_trials=self.n_startup_trials, seed=self.seed, multivariate=True)
         elif sampler_method == "skopt":
+            from optuna.integration.skopt import SkoptSampler
+
             # cf https://scikit-optimize.github.io/#skopt.Optimizer
             # GP: gaussian process
             # Gradient boosted regression: GBRT
